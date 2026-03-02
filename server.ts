@@ -2,73 +2,95 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
-import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const dbPath = path.join(__dirname, "family_link.db");
-const db = new Database(dbPath);
+const isVercel = process.env.VERCEL === "1";
+const dbPath = isVercel 
+  ? path.join("/tmp", "family_link.db")
+  : path.join(__dirname, "family_link.db");
 
-// Initialize DB
-try {
-  db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    role TEXT,
-    family_code TEXT,
-    bio TEXT,
-    profile_picture TEXT,
-    theme TEXT DEFAULT 'warm',
-    font TEXT DEFAULT 'serif',
-    status TEXT DEFAULT 'online'
-  );
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sender_id INTEGER,
-    content TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    family_code TEXT,
-    is_pinned INTEGER DEFAULT 0,
-    is_archived INTEGER DEFAULT 0,
-    is_deleted INTEGER DEFAULT 0,
-    quoted_message_id INTEGER,
-    attachment_url TEXT,
-    FOREIGN KEY(sender_id) REFERENCES users(id),
-    FOREIGN KEY(quoted_message_id) REFERENCES messages(id)
-  );
-  CREATE TABLE IF NOT EXISTS message_reads (
-    message_id INTEGER,
-    user_id INTEGER,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (message_id, user_id),
-    FOREIGN KEY(message_id) REFERENCES messages(id),
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-  CREATE TABLE IF NOT EXISTS message_reactions (
-    message_id INTEGER,
-    user_id INTEGER,
-    emoji TEXT,
-    PRIMARY KEY (message_id, user_id, emoji),
-    FOREIGN KEY(message_id) REFERENCES messages(id),
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-  CREATE TABLE IF NOT EXISTS activity_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    family_code TEXT,
-    type TEXT,
-    content TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-`);
-} catch (error) {
-  console.error("Database initialization error:", error);
+let db: any;
+
+async function initDb() {
+  console.log("Initializing database...");
+  try {
+    console.log("Attempting to import better-sqlite3...");
+    const Database = (await import("better-sqlite3")).default;
+    console.log("Opening database at:", dbPath);
+    db = new Database(dbPath);
+    console.log("Database opened successfully.");
+    // Initialize DB
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE,
+      role TEXT,
+      family_code TEXT,
+      bio TEXT,
+      profile_picture TEXT,
+      theme TEXT DEFAULT 'warm',
+      font TEXT DEFAULT 'serif',
+      status TEXT DEFAULT 'online'
+    );
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sender_id INTEGER,
+      content TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      family_code TEXT,
+      is_pinned INTEGER DEFAULT 0,
+      is_archived INTEGER DEFAULT 0,
+      is_deleted INTEGER DEFAULT 0,
+      quoted_message_id INTEGER,
+      attachment_url TEXT,
+      FOREIGN KEY(sender_id) REFERENCES users(id),
+      FOREIGN KEY(quoted_message_id) REFERENCES messages(id)
+    );
+    CREATE TABLE IF NOT EXISTS message_reads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id INTEGER,
+      user_id INTEGER,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(message_id, user_id),
+      FOREIGN KEY(message_id) REFERENCES messages(id),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS message_reactions (
+      message_id INTEGER,
+      user_id INTEGER,
+      emoji TEXT,
+      PRIMARY KEY (message_id, user_id, emoji),
+      FOREIGN KEY(message_id) REFERENCES messages(id),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      family_code TEXT,
+      type TEXT,
+      content TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  } catch (error) {
+    console.error("Database initialization error:", error);
+    // Fallback to in-memory if file fails
+    try {
+      const Database = (await import("better-sqlite3")).default;
+      db = new Database(":memory:");
+    } catch (e) {
+      console.error("Failed to even initialize in-memory DB:", e);
+    }
+  }
 }
 
 async function startServer() {
+  console.log("Starting server function...");
+  await initDb();
+  console.log("Database initialization finished.");
   const app = express();
   const server = createServer(app);
   const wss = new WebSocketServer({ server });
@@ -81,8 +103,15 @@ async function startServer() {
     next();
   });
 
+  app.get("/api/health/basic", (req, res) => {
+    res.json({ status: "ok", message: "Server is running", time: new Date().toISOString() });
+  });
+
   app.get("/api/health", (req, res) => {
     try {
+      if (!db) {
+        return res.json({ status: "ok", database: "not_initialized_yet", note: "DB is being initialized asynchronously" });
+      }
       const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get() as any;
       res.json({ status: "ok", database: "connected", users: userCount.count });
     } catch (error) {
@@ -452,9 +481,18 @@ async function startServer() {
     });
   }
 
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  if (!isVercel) {
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
+  
+  return app;
 }
 
-startServer();
+const appPromise = startServer();
+
+export default async (req: any, res: any) => {
+  const app = await appPromise;
+  return app(req, res);
+};
