@@ -9,10 +9,12 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database("family_link.db");
+const dbPath = path.join(__dirname, "family_link.db");
+const db = new Database(dbPath);
 
 // Initialize DB
-db.exec(`
+try {
+  db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
@@ -62,6 +64,9 @@ db.exec(`
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
+} catch (error) {
+  console.error("Database initialization error:", error);
+}
 
 async function startServer() {
   const app = express();
@@ -71,17 +76,29 @@ async function startServer() {
 
   app.use(express.json());
 
+  app.get("/api/health", (req, res) => {
+    try {
+      const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get() as any;
+      res.json({ status: "ok", database: "connected", users: userCount.count });
+    } catch (error) {
+      res.status(500).json({ status: "error", database: "error", message: (error as Error).message });
+    }
+  });
+
   // API Routes
   app.post("/api/login", (req, res) => {
     const { username, familyCode, role } = req.body;
+    console.log(`Login attempt: ${username} with code ${familyCode}`);
     try {
       let user = db.prepare("SELECT * FROM users WHERE username = ?").get(username) as any;
       
       if (user) {
         if (user.family_code !== familyCode) {
+          console.log(`Login failed: Incorrect family code for ${username}`);
           return res.status(401).json({ error: "Incorrect family code for this username." });
         }
       } else {
+        console.log(`Creating new user: ${username} as ${role}`);
         const info = db.prepare("INSERT INTO users (username, role, family_code) VALUES (?, ?, ?)").run(username, role, familyCode);
         user = { id: info.lastInsertRowid, username, role, family_code: familyCode, bio: "", profile_picture: "" };
         
@@ -90,7 +107,8 @@ async function startServer() {
       }
       res.json(user);
     } catch (error) {
-      res.status(500).json({ error: "Failed to login" });
+      console.error("Login error:", error);
+      res.status(500).json({ error: "Failed to login. Database error." });
     }
   });
 
