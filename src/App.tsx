@@ -39,6 +39,7 @@ interface Message {
   quoted_sender_name?: string;
   attachment_url?: string;
   is_archived?: boolean;
+  family_code: string;
 }
 
 interface ActivityLog {
@@ -584,33 +585,47 @@ export default function App() {
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() && !attachment) return;
-    if (!user) return;
-
-    const msg = { 
-      content: input, 
-      sender_id: user.id,
-      family_code: user.family_code,
-      quoted_message_id: replyToMessage?.id,
-      attachment_url: attachment
-    };
-
-    const { error } = await supabase.from('messages').insert([msg]);
-    
-    if (error) {
-      console.error("Error sending message:", error);
+    if (!user) {
+      console.error("No user found when trying to send message");
       return;
     }
 
-    channelRef.current?.send({
-      type: 'broadcast',
-      event: 'typing',
-      payload: { isTyping: false, username: user.username, userId: user.id }
-    });
-    
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    setInput("");
-    setReplyToMessage(null);
-    setAttachment(null);
+    try {
+      const msg = { 
+        content: input.trim(), 
+        sender_id: user.id,
+        family_code: user.family_code,
+        quoted_message_id: replyToMessage?.id || null,
+        attachment_url: attachment || null,
+        is_pinned: false,
+        is_archived: false,
+        is_deleted: false
+      };
+
+      const { error } = await supabase.from('messages').insert([msg]);
+      
+      if (error) {
+        console.error("Supabase error sending message:", error);
+        alert(`Gagal mengirim pesan: ${error.message}`);
+        return;
+      }
+
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'typing',
+          payload: { isTyping: false, username: user.username, userId: user.id }
+        });
+      }
+      
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      setInput("");
+      setReplyToMessage(null);
+      setAttachment(null);
+    } catch (err) {
+      console.error("Unexpected error in sendMessage:", err);
+      alert("Terjadi kesalahan tak terduga saat mengirim pesan.");
+    }
   };
 
   const deleteMessage = async (messageId: number) => {
