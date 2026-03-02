@@ -487,42 +487,26 @@ export default function App() {
     setIsLoading(true);
     setLoginError("");
     try {
-      // In a real app with Supabase Auth, we'd use email/password.
-      // For this "Family Code" system, we'll use a trick: 
-      // Use username@familycode.com as email and familyCode as password.
-      const email = `${loginData.username.toLowerCase().replace(/\s/g, '')}@${loginData.familyCode.toLowerCase()}.family`;
-      const password = loginData.familyCode;
-
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const { data: authData, error: authError } = await supabase.auth.signInAnonymously();
 
       if (authError) {
-        // If user doesn't exist, try signing up
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              username: loginData.username,
-              role: loginData.role,
-              family_code: loginData.familyCode,
-            }
-          }
-        });
+        setLoginError(authError.message);
+        return;
+      }
 
-        if (signUpError) {
-          setLoginError(signUpError.message);
-          return;
-        }
+      if (authData.user) {
+        // Check if profile exists
+        const { data: existingProfile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', authData.user.id)
+          .single();
 
-        // Create profile if it doesn't exist
-        if (signUpData.user) {
+        if (!existingProfile) {
           const { error: profileError } = await supabase
             .from('profiles')
             .insert([{
-              id: signUpData.user.id,
+              id: authData.user.id,
               username: loginData.username,
               role: loginData.role,
               family_code: loginData.familyCode
@@ -538,10 +522,18 @@ export default function App() {
             type: 'join',
             content: `${loginData.username} joined the family sanctuary.`
           }]);
+        } else {
+          // Update profile with current login data
+          await supabase
+            .from('profiles')
+            .update({
+              username: loginData.username,
+              role: loginData.role,
+              family_code: loginData.familyCode
+            })
+            .eq('id', authData.user.id);
         }
       }
-      
-      // Profile will be fetched by the onAuthStateChange listener
     } catch (error) {
       console.error("Login error:", error);
       setLoginError("An unexpected error occurred.");
@@ -871,7 +863,7 @@ export default function App() {
   const generateProfilePicture = async () => {
     setIsGeneratingImage(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY as string });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-image",
         contents: {
