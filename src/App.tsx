@@ -369,14 +369,21 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(loginData),
       });
+      
+      if (res.status === 404) {
+        setLoginError("API endpoint not found (404). Please check server deployment.");
+        return;
+      }
+
       const data = await res.json();
       if (!res.ok) {
-        setLoginError(data.error || "Login failed");
+        setLoginError(data.error || `Login failed (${res.status})`);
         return;
       }
       setUser(data);
     } catch (error) {
-      setLoginError("Connection error. Please try again.");
+      console.error("Login error:", error);
+      setLoginError("Connection error. The server might be offline or unreachable.");
     } finally {
       setIsLoading(false);
     }
@@ -676,7 +683,7 @@ export default function App() {
   const generateProfilePicture = async () => {
     setIsGeneratingImage(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY as string });
+      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEYS as string });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-image",
         contents: {
